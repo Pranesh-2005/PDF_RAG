@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -10,7 +11,7 @@ import shutil
 import uuid
 
 from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA
@@ -21,6 +22,14 @@ AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
 AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")  # For chat completion
 AZURE_API_VERSION = os.getenv("AZURE_OPENAI_VERSION")
+
+# Validate environment variables
+if not all([AZURE_API_KEY, AZURE_ENDPOINT, AZURE_DEPLOYMENT, AZURE_API_VERSION]):
+    print("ERROR: Missing required Azure OpenAI environment variables!")
+    print(f"AZURE_API_KEY: {'✓' if AZURE_API_KEY else '✗'}")
+    print(f"AZURE_ENDPOINT: {'✓' if AZURE_ENDPOINT else '✗'}")
+    print(f"AZURE_DEPLOYMENT: {'✓' if AZURE_DEPLOYMENT else '✗'}")
+    print(f"AZURE_API_VERSION: {'✓' if AZURE_API_VERSION else '✗'}")
 
 # Flask app setup
 app = Flask(__name__)
@@ -148,6 +157,8 @@ def upload():
         })
         
     except Exception as e:
+        print(f"Upload error: {str(e)}")
+        traceback.print_exc()
         return jsonify({"error": f"Upload failed: {str(e)}"}), 500
 
 @app.route("/api/delete/<filename>", methods=["DELETE"])
@@ -174,61 +185,90 @@ def delete_file(filename):
         return jsonify({"message": f"File '{filename}' deleted successfully."})
         
     except Exception as e:
+        print(f"Delete error: {str(e)}")
+        traceback.print_exc()
         return jsonify({"error": f"Error deleting file: {str(e)}"}), 500
 
 @app.route("/api/ask", methods=["POST"])
 def ask():
     try:
+        print("=== ASK REQUEST STARTED ===")
+        
+        # Check environment variables first
+        if not all([AZURE_API_KEY, AZURE_ENDPOINT, AZURE_DEPLOYMENT, AZURE_API_VERSION]):
+            print("ERROR: Missing Azure OpenAI credentials")
+            return jsonify({"error": "Server configuration error: Missing Azure OpenAI credentials"}), 500
+        
         data = request.get_json()
         if not data:
+            print("ERROR: Invalid JSON data")
             return jsonify({"error": "Invalid JSON data"}), 400
             
         question = data.get("question")
         if not question or not question.strip():
+            print("ERROR: Question is required")
             return jsonify({"error": "Question is required"}), 400
 
         question = question.strip()
+        print(f"Question: {question}")
 
         # Check if there are any PDFs
         pdf_files = [f for f in os.listdir(UPLOAD_FOLDER) if f.endswith(".pdf")]
+        print(f"Found PDF files: {pdf_files}")
+        
         if not pdf_files:
+            print("ERROR: No PDF files found")
             return jsonify({"error": "No PDF files found. Please upload at least one PDF first."}), 400
 
         # Load all PDFs
         docs = []
         for filename in pdf_files:
             try:
+                print(f"Loading PDF: {filename}")
                 loader = PyPDFLoader(os.path.join(UPLOAD_FOLDER, filename))
-                docs.extend(loader.load())
+                file_docs = loader.load()
+                docs.extend(file_docs)
+                print(f"Loaded {len(file_docs)} documents from {filename}")
             except Exception as e:
                 print(f"Error loading {filename}: {e}")
                 continue
 
         if not docs:
+            print("ERROR: No content found in PDF files")
             return jsonify({"error": "No content found in PDF files."}), 400
+
+        print(f"Total documents loaded: {len(docs)}")
 
         # Split into chunks
         text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         split_docs = text_splitter.split_documents(docs)
+        print(f"Split into {len(split_docs)} chunks")
 
         if not split_docs:
+            print("ERROR: No text content could be extracted")
             return jsonify({"error": "No text content could be extracted from PDFs."}), 400
 
         # Azure Embedding setup
         try:
+            print("Setting up Azure embeddings...")
             embeddings = AzureOpenAIEmbeddings(
                 api_key=AZURE_API_KEY,
                 azure_endpoint=AZURE_ENDPOINT,
                 azure_deployment="text-embedding-ada-002",
                 api_version=AZURE_API_VERSION,
             )
+            print("Embeddings setup successful")
         except Exception as e:
+            print(f"Error setting up embeddings: {str(e)}")
+            traceback.print_exc()
             return jsonify({"error": f"Error setting up embeddings: {str(e)}"}), 500
 
         # Create Chroma DB with error handling
         try:
+            print("Setting up Chroma database...")
             # Generate unique collection name to avoid conflicts
             collection_name = f"docs_{str(uuid.uuid4())[:8]}"
+            print(f"Collection name: {collection_name}")
             
             # Clean up any existing corrupted database
             if os.path.exists(CHROMA_PATH):
@@ -236,10 +276,12 @@ def ask():
                     # Try to create a test collection first
                     test_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
                     del test_db
+                    print("Existing Chroma DB is healthy")
                 except Exception:
                     print("Detected corrupted Chroma DB, cleaning up...")
                     cleanup_chroma_db()
             
+            print("Creating Chroma database...")
             db = Chroma.from_documents(
                 documents=split_docs, 
                 embedding=embeddings, 
@@ -247,12 +289,15 @@ def ask():
                 collection_name=collection_name
             )
             retriever = db.as_retriever(search_kwargs={"k": 3})
+            print("Chroma database created successfully")
             
         except Exception as e:
             print(f"Chroma DB error: {e}")
+            traceback.print_exc()
             # Clean up and try again
             cleanup_chroma_db()
             try:
+                print("Retrying Chroma database creation...")
                 collection_name = f"docs_{str(uuid.uuid4())[:8]}"
                 db = Chroma.from_documents(
                     documents=split_docs, 
@@ -261,11 +306,15 @@ def ask():
                     collection_name=collection_name
                 )
                 retriever = db.as_retriever(search_kwargs={"k": 3})
+                print("Chroma database retry successful")
             except Exception as e2:
+                print(f"Chroma retry failed: {str(e2)}")
+                traceback.print_exc()
                 return jsonify({"error": f"Database error: {str(e2)}"}), 500
 
         # QA chain
         try:
+            print("Setting up Azure Chat OpenAI...")
             llm = AzureChatOpenAI(
                 azure_deployment=AZURE_DEPLOYMENT,
                 api_key=AZURE_API_KEY,
@@ -274,17 +323,24 @@ def ask():
                 temperature=0.1,
                 max_tokens=1000
             )
+            print("Azure Chat OpenAI setup successful")
 
+            print("Creating QA chain...")
             qa = RetrievalQA.from_chain_type(
                 llm=llm, 
                 chain_type="stuff",
                 retriever=retriever, 
                 return_source_documents=True
             )
+            print("QA chain created successfully")
 
+            print("Processing question...")
             result = qa.invoke({"query": question})
+            print("Question processed successfully")
             
         except Exception as e:
+            print(f"Error processing question: {str(e)}")
+            traceback.print_exc()
             return jsonify({"error": f"Error processing question: {str(e)}"}), 500
         
         # Get source documents for reference
@@ -297,6 +353,7 @@ def ask():
                 "page": doc.metadata.get("page", "N/A")
             })
         
+        print("=== ASK REQUEST COMPLETED ===")
         return jsonify({
             "answer": result["result"],
             "sources": sources,
@@ -305,6 +362,7 @@ def ask():
         
     except Exception as e:
         print(f"Unexpected error in ask endpoint: {e}")
+        traceback.print_exc()
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 @app.route("/api/list-files", methods=["GET"])
@@ -344,6 +402,8 @@ def list_files():
         })
         
     except Exception as e:
+        print(f"List files error: {str(e)}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/cleanup-status", methods=["GET"])
@@ -370,6 +430,8 @@ def cleanup_status():
         return status
         
     except Exception as e:
+        print(f"Cleanup status error: {str(e)}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.errorhandler(404)
@@ -378,6 +440,7 @@ def not_found(error):
 
 @app.errorhandler(500)
 def internal_error(error):
+    print(f"Internal server error: {error}")
     return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == "__main__":
@@ -389,6 +452,13 @@ if __name__ == "__main__":
     
     # Get port from environment variable (Render requirement)
     port = int(os.environ.get("PORT", 5000))
+    
+    print(f"Starting server on port {port}")
+    print(f"Environment check:")
+    print(f"  AZURE_API_KEY: {'✓' if AZURE_API_KEY else '✗'}")
+    print(f"  AZURE_ENDPOINT: {'✓' if AZURE_ENDPOINT else '✗'}")
+    print(f"  AZURE_DEPLOYMENT: {'✓' if AZURE_DEPLOYMENT else '✗'}")
+    print(f"  AZURE_API_VERSION: {'✓' if AZURE_API_VERSION else '✗'}")
     
     # Run app
     app.run(host="0.0.0.0", port=port, debug=True)
