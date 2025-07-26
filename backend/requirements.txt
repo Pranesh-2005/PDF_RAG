@@ -1,0 +1,11 @@
+Flask==3.0.0
+Flask-CORS==4.0.0
+python-dotenv==1.0.0
+Werkzeug==3.0.1
+langchain==0.1.0
+langchain-openai==0.0.5
+langchain-community==0.0.10
+langchain-chroma==0.1.0
+pypdf==3.17.4
+openai==1.12.0
+tiktoken==0.5.2

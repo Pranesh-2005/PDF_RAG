@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AdvisorRAG - PDF Q&A</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>AdvisorRAG - PDF Q&A System</h1>
+        
+        <!-- Upload Section -->
+        <div class="section">
+            <h2>Upload PDF</h2>
+            <input type="file" id="fileInput" accept=".pdf" multiple>
+            <button onclick="uploadFiles()">Upload</button>
+        </div>
+
+        <!-- File List -->
+        <div class="section">
+            <h2>Uploaded Files</h2>
+            <div id="fileList">No files uploaded</div>
+        </div>
+
+        <!-- Chat Section -->
+        <div class="section">
+            <h2>Ask Questions</h2>
+            <div id="chatBox"></div>
+            <div class="input-group">
+                <input type="text" id="questionInput" placeholder="Ask a question..." disabled>
+                <button onclick="askQuestion()" id="askBtn" disabled>Ask</button>
+            </div>
+        </div>
+
+        <!-- Loading -->
+        <div id="loading" class="loading">Processing...</div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
