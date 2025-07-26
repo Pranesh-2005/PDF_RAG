@@ -6,13 +6,13 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "PDF Chat Assistant",
-  description: "Upload PDFs and ask questions about their content using AI",
+  title: "Collaborative PDF Chat Assistant",
+  description: "Upload PDFs and ask questions about their content using AI as a group.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "PDF Chat Assistant",
+    title: "Collaborative PDF Chat Assistant",
   },
   icons: {
     icon: [
