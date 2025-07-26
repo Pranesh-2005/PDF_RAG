@@ -403,4 +403,9 @@ if __name__ == "__main__":
     print(f"Starting server on port {port}")
     print(f"Environment check:")
     print(f"  AZURE_API_KEY: {'✓' if AZURE_API_KEY else '✗'}")
-    print(f"  AZURE_ENDPOINT: {'✓' if AZURE_ENDPOINT else
+    print(f"  AZURE_ENDPOINT: {'✓' if AZURE_ENDPOINT else '✗'}")
+    print(f"  AZURE_DEPLOYMENT: {'✓' if AZURE_DEPLOYMENT else '✗'}")
+    print(f"  AZURE_API_VERSION: {'✓' if AZURE_API_VERSION else '✗'}")
+    
+    # Run app
+    app.run(host="0.0.0.0", port=port, debug=False)  # Set debug=False for production
