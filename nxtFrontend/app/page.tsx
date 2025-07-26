@@ -15,6 +15,12 @@ export default function Home() {
   const { toasts, showToast, removeToast } = useToast()
   const [globalLoading, setGlobalLoading] = useState(false)
 
+  // Wrapper function to handle the return type mismatch
+  const handleDeleteFile = async (filename: string): Promise<void> => {
+    await deleteFile(filename)
+    // Don't return the boolean, convert to void
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -40,7 +46,7 @@ export default function Home() {
           <FileList
             files={files}
             loading={filesLoading}
-            onDeleteFile={deleteFile}
+            onDeleteFile={handleDeleteFile} // Use wrapper function
             onRefresh={loadFiles}
             onShowToast={showToast}
           />
