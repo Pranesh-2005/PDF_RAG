@@ -29,7 +29,7 @@ export default function Home() {
           <div className="text-center">
             <div className="flex items-center justify-center gap-3 mb-4">
               <FileText className="h-10 w-10" />
-              <h1 className="text-4xl font-bold">Collabrative PDF Chat Assistant</h1>
+              <h1 className="text-4xl font-bold">Collaborative PDF Chat Assistant</h1>
             </div>
             <p className="text-xl text-blue-100">Upload PDFs and ask questions about their content using AI as a group</p>
           </div>
