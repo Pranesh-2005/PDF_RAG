@@ -37,7 +37,6 @@ CORS(app)  # Enable CORS for frontend communication
 
 # Configuration
 UPLOAD_FOLDER = "docs"
-CHROMA_PATH = "embeddings"
 CLEANUP_INTERVAL = 600  # 10 minutes in seconds
 MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'pdf'}
@@ -50,16 +49,6 @@ cleanup_thread = None
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def cleanup_chroma_db():
-    """Clean up corrupted Chroma database"""
-    try:
-        if os.path.exists(CHROMA_PATH):
-            shutil.rmtree(CHROMA_PATH, ignore_errors=True)
-            print("Cleaned up corrupted Chroma database")
-            time.sleep(1)  # Wait a moment before recreating
-    except Exception as e:
-        print(f"Error cleaning up Chroma DB: {e}")
 
 def cleanup_old_files():
     """Background thread to clean up old files every 10 minutes"""
@@ -83,10 +72,6 @@ def cleanup_old_files():
                 # Remove from tracking
                 if filename in file_timestamps:
                     del file_timestamps[filename]
-            
-            # Clean up embeddings if no files left
-            if not file_timestamps and os.path.exists(CHROMA_PATH):
-                cleanup_chroma_db()
             
         except Exception as e:
             print(f"Error in cleanup thread: {e}")
@@ -178,10 +163,6 @@ def delete_file(filename):
         if filename in file_timestamps:
             del file_timestamps[filename]
         
-        # Clean up embeddings if no files left
-        if not file_timestamps and os.path.exists(CHROMA_PATH):
-            cleanup_chroma_db()
-        
         return jsonify({"message": f"File '{filename}' deleted successfully."})
         
     except Exception as e:
@@ -263,54 +244,23 @@ def ask():
             traceback.print_exc()
             return jsonify({"error": f"Error setting up embeddings: {str(e)}"}), 500
 
-        # Create Chroma DB with error handling
+        # Create IN-MEMORY Chroma DB (no persistence)
         try:
-            print("Setting up Chroma database...")
-            # Generate unique collection name to avoid conflicts
-            collection_name = f"docs_{str(uuid.uuid4())[:8]}"
-            print(f"Collection name: {collection_name}")
+            print("Creating in-memory Chroma database...")
             
-            # Clean up any existing corrupted database
-            if os.path.exists(CHROMA_PATH):
-                try:
-                    # Try to create a test collection first
-                    test_db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-                    del test_db
-                    print("Existing Chroma DB is healthy")
-                except Exception:
-                    print("Detected corrupted Chroma DB, cleaning up...")
-                    cleanup_chroma_db()
-            
-            print("Creating Chroma database...")
+            # Use in-memory database (no persist_directory)
             db = Chroma.from_documents(
                 documents=split_docs, 
-                embedding=embeddings, 
-                persist_directory=CHROMA_PATH,
-                collection_name=collection_name
+                embedding=embeddings
+                # No persist_directory = in-memory only
             )
             retriever = db.as_retriever(search_kwargs={"k": 3})
-            print("Chroma database created successfully")
+            print("In-memory Chroma database created successfully")
             
         except Exception as e:
             print(f"Chroma DB error: {e}")
             traceback.print_exc()
-            # Clean up and try again
-            cleanup_chroma_db()
-            try:
-                print("Retrying Chroma database creation...")
-                collection_name = f"docs_{str(uuid.uuid4())[:8]}"
-                db = Chroma.from_documents(
-                    documents=split_docs, 
-                    embedding=embeddings, 
-                    persist_directory=CHROMA_PATH,
-                    collection_name=collection_name
-                )
-                retriever = db.as_retriever(search_kwargs={"k": 3})
-                print("Chroma database retry successful")
-            except Exception as e2:
-                print(f"Chroma retry failed: {str(e2)}")
-                traceback.print_exc()
-                return jsonify({"error": f"Database error: {str(e2)}"}), 500
+            return jsonify({"error": f"Database error: {str(e)}"}), 500
 
         # QA chain
         try:
@@ -444,9 +394,6 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == "__main__":
-    # Clean up any existing corrupted database on startup
-    cleanup_chroma_db()
-    
     # Start cleanup thread when app starts
     start_cleanup_thread()
     
@@ -456,9 +403,4 @@ if __name__ == "__main__":
     print(f"Starting server on port {port}")
     print(f"Environment check:")
     print(f"  AZURE_API_KEY: {'✓' if AZURE_API_KEY else '✗'}")
-    print(f"  AZURE_ENDPOINT: {'✓' if AZURE_ENDPOINT else '✗'}")
-    print(f"  AZURE_DEPLOYMENT: {'✓' if AZURE_DEPLOYMENT else '✗'}")
-    print(f"  AZURE_API_VERSION: {'✓' if AZURE_API_VERSION else '✗'}")
-    
-    # Run app
-    app.run(host="0.0.0.0", port=port, debug=True)
+    print(f"  AZURE_ENDPOINT: {'✓' if AZURE_ENDPOINT else
