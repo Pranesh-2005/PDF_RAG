@@ -9,6 +9,7 @@ from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import shutil
 import uuid
+import gc
 
 from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
 from langchain_chroma import Chroma
@@ -38,6 +39,7 @@ CORS(app)  # Enable CORS for frontend communication
 # Configuration
 UPLOAD_FOLDER = "docs"
 CLEANUP_INTERVAL = 600  # 10 minutes in seconds
+RESPONSE_CLEANUP_DELAY = 60  # 1 minute after response in seconds
 MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'pdf'}
 
@@ -46,9 +48,39 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # File tracking for cleanup
 file_timestamps = {}
 cleanup_thread = None
+# Track active ChromaDB instances for cleanup
+active_db_instances = {}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def cleanup_db_instance(session_id):
+    """Clean up a specific ChromaDB instance after delay"""
+    def delayed_cleanup():
+        time.sleep(RESPONSE_CLEANUP_DELAY)
+        try:
+            if session_id in active_db_instances:
+                db_instance = active_db_instances[session_id]
+                # Delete the collection
+                try:
+                    db_instance.delete_collection()
+                    print(f"Cleaned up ChromaDB collection for session: {session_id}")
+                except:
+                    pass
+                
+                # Remove from tracking
+                del active_db_instances[session_id]
+                
+                # Force garbage collection
+                del db_instance
+                gc.collect()
+                print(f"Memory cleanup completed for session: {session_id}")
+        except Exception as e:
+            print(f"Error in DB cleanup: {e}")
+    
+    # Start cleanup thread
+    cleanup_thread = threading.Thread(target=delayed_cleanup, daemon=True)
+    cleanup_thread.start()
 
 def cleanup_old_files():
     """Background thread to clean up old files every 10 minutes"""
@@ -134,6 +166,16 @@ def upload():
         # Start cleanup thread if not running
         start_cleanup_thread()
         
+        # Clear any existing DB instances when new file is uploaded
+        for session_id in list(active_db_instances.keys()):
+            try:
+                active_db_instances[session_id].delete_collection()
+                del active_db_instances[session_id]
+            except:
+                pass
+        gc.collect()
+        print("Cleared existing embeddings due to new file upload")
+        
         return jsonify({
             "message": f"PDF '{filename}' uploaded successfully.",
             "filename": filename,
@@ -172,8 +214,13 @@ def delete_file(filename):
 
 @app.route("/api/ask", methods=["POST"])
 def ask():
+    session_id = None
     try:
         print("=== ASK REQUEST STARTED ===")
+        
+        # Generate unique session ID for this request
+        session_id = str(uuid.uuid4())[:8]
+        print(f"Session ID: {session_id}")
         
         # Check environment variables first
         if not all([AZURE_API_KEY, AZURE_ENDPOINT, AZURE_DEPLOYMENT, AZURE_API_VERSION]):
@@ -244,18 +291,24 @@ def ask():
             traceback.print_exc()
             return jsonify({"error": f"Error setting up embeddings: {str(e)}"}), 500
 
-        # Create IN-MEMORY Chroma DB (no persistence)
+        # Create IN-MEMORY Chroma DB with unique collection name
         try:
             print("Creating in-memory Chroma database...")
+            collection_name = f"docs_{session_id}"
             
             # Use in-memory database (no persist_directory)
             db = Chroma.from_documents(
                 documents=split_docs, 
-                embedding=embeddings
+                embedding=embeddings,
+                collection_name=collection_name
                 # No persist_directory = in-memory only
             )
+            
+            # Store DB instance for later cleanup
+            active_db_instances[session_id] = db
+            
             retriever = db.as_retriever(search_kwargs={"k": 3})
-            print("In-memory Chroma database created successfully")
+            print(f"In-memory Chroma database created successfully with collection: {collection_name}")
             
         except Exception as e:
             print(f"Chroma DB error: {e}")
@@ -304,15 +357,31 @@ def ask():
             })
         
         print("=== ASK REQUEST COMPLETED ===")
+        
+        # Schedule cleanup of this DB instance after 1 minute
+        if session_id:
+            cleanup_db_instance(session_id)
+            print(f"Scheduled cleanup for session {session_id} in {RESPONSE_CLEANUP_DELAY} seconds")
+        
         return jsonify({
             "answer": result["result"],
             "sources": sources,
-            "question": question
+            "question": question,
+            "session_id": session_id
         })
         
     except Exception as e:
         print(f"Unexpected error in ask endpoint: {e}")
         traceback.print_exc()
+        
+        # Clean up on error
+        if session_id and session_id in active_db_instances:
+            try:
+                active_db_instances[session_id].delete_collection()
+                del active_db_instances[session_id]
+            except:
+                pass
+        
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 @app.route("/api/list-files", methods=["GET"])
@@ -348,7 +417,8 @@ def list_files():
         return jsonify({
             "files": files_with_info,
             "total_files": len(files_with_info),
-            "cleanup_interval": CLEANUP_INTERVAL // 60
+            "cleanup_interval": CLEANUP_INTERVAL // 60,
+            "active_sessions": len(active_db_instances)
         })
         
     except Exception as e:
@@ -364,6 +434,7 @@ def cleanup_status():
         status = {
             "cleanup_interval": CLEANUP_INTERVAL // 60,  # in minutes
             "total_files": len(file_timestamps),
+            "active_db_sessions": len(active_db_instances),
             "files": []
         }
         
